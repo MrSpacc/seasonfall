@@ -13,6 +13,7 @@
 ![Wayland](https://img.shields.io/badge/Wayland-layer--shell-FFBC00)
 ![niri](https://img.shields.io/badge/niri-tested-7B61FF)
 ![Open-Meteo](https://img.shields.io/badge/weather-Open--Meteo-00A3E0)
+[![GitHub](https://img.shields.io/badge/GitHub-MrSpacc%2Fseasonfall-181717?logo=github)](https://github.com/MrSpacc/seasonfall)
 
 [Возможности](#возможности) · [Установка](#установка) · [Запуск](#запуск) ·
 [Настройка](#настройка) · [Как это устроено](#как-это-устроено) ·
@@ -68,7 +69,7 @@ sudo pacman -S gtk3 gtk-layer-shell python-gobject python-cairo python-pillow
 Склонируйте репозиторий и перейдите в его каталог:
 
 ```sh
-git clone https://github.com/you/seasonfall.git
+git clone https://github.com/MrSpacc/seasonfall.git
 cd seasonfall
 ```
 
@@ -122,7 +123,7 @@ cp config.example.toml config.toml
 Добавьте в `~/.config/niri/config.kdl` абсолютный путь к лаунчеру:
 
 ```kdl
-spawn-at-startup "/home/you/seasonfall/seasonfall-run"
+spawn-at-startup "/home/you/Code/seasonfall/seasonfall-run"
 ```
 
 Замените путь на свой. После следующего входа анимация появится сама.
