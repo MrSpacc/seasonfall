@@ -12,7 +12,8 @@ import threading
 import time
 from pathlib import Path
 
-from config import Config, ConfigError, cache_home, default_config_path, load_config
+from config import (Config, ConfigError, ConfigWatcher, cache_home,
+                    default_config_path, load_config)
 from effects import FIELD_CLASSES
 from seasons import EFFECT_LABELS, SEASON_LABELS, season_for, moscow_now
 from weather import WeatherService
@@ -144,7 +145,7 @@ def run_preview(cfg: Config, args) -> int:
 
 
 # --- графический режим ---------------------------------------------------
-def run_overlay(cfg: Config, args) -> int:
+def run_overlay(cfg: Config, args, config_path: Path) -> int:
     import gi
 
     gi.require_version("Gtk", "3.0")
@@ -161,12 +162,20 @@ def run_overlay(cfg: Config, args) -> int:
         weather, _ = service.fetch()
 
     manager = OverlayManager(cfg, weather, season, args.effect)
-    fps = cfg.render.fps
-    interval_ms = max(8, int(round(1000 / fps)))
-    slow_every = max(1, int(round(fps / 15.0)))
     slow_effects = {"leaves", "petals", "fluff", "frost", "none"}
-    state = {"last": time.monotonic(), "season_check": 0.0, "frame": 0}
+    state = {
+        "last": time.monotonic(),
+        "season_check": 0.0,
+        "frame": 0,
+        "fps": cfg.render.fps,
+        "slow_every": max(1, int(round(cfg.render.fps / 15.0))),
+        "source": None,
+    }
     stop_event = threading.Event()
+    weather_wake = threading.Event()
+    weather_lock = threading.Lock()
+    weather_state = {"service": service, "minutes": cfg.weather.update_minutes}
+    watcher = ConfigWatcher(config_path)
 
     def post_weather(new_weather) -> bool:
         if new_weather is None:
@@ -178,14 +187,21 @@ def run_overlay(cfg: Config, args) -> int:
 
     def poll_weather() -> None:
         while not stop_event.is_set():
+            with weather_lock:
+                service = weather_state["service"]
+                minutes = weather_state["minutes"]
             try:
                 new_weather, ok = service.fetch()
                 if ok or new_weather is not None:
                     GLib.idle_add(post_weather, new_weather)
             except Exception as exc:  # noqa: BLE001 - поток не должен падать
                 log.warning("Ошибка опроса погоды: %s", exc)
-            wait = max(60.0, cfg.weather.update_minutes * 60.0)
-            stop_event.wait(wait)
+            if stop_event.is_set():
+                break
+            wait = max(60.0, minutes * 60.0)
+            # Новый конфиг будит поток, чтобы погода обновилась сразу.
+            if weather_wake.wait(wait):
+                weather_wake.clear()
 
     def tick() -> bool:
         now = time.monotonic()
@@ -196,7 +212,7 @@ def run_overlay(cfg: Config, args) -> int:
         state["frame"] += 1
         effects = manager.effects
         slow = bool(effects) and all(e in slow_effects for e in effects)
-        if not slow or state["frame"] % slow_every == 0:
+        if not slow or state["frame"] % state["slow_every"] == 0:
             manager.redraw()
         state["season_check"] += dt
         if state["season_check"] >= 60.0:
@@ -207,8 +223,68 @@ def run_overlay(cfg: Config, args) -> int:
                 log.info("Сменился сезон: %s", SEASON_LABELS.get(new_season, new_season))
         return True
 
+    def schedule_ticks() -> None:
+        if state["source"] is not None:
+            GLib.source_remove(state["source"])
+        interval_ms = max(8, int(round(1000 / state["fps"])))
+        state["source"] = GLib.timeout_add(interval_ms, tick)
+
+    def reload_config() -> bool:
+        """Подхватывает изменения config.toml без перезапуска."""
+        if not watcher.changed():
+            return True
+        try:
+            new_cfg = load_config(config_path)
+        except (ConfigError, OSError) as exc:
+            log.warning("Конфиг не применён, работаю со старым: %s", exc)
+            return True
+        if args.fps is not None:
+            new_cfg.render.fps = args.fps
+
+        old_fps = cfg.render.fps
+        effects_changed = new_cfg.effects != cfg.effects
+        visuals_changed = (
+            new_cfg.render.density != cfg.render.density
+            or new_cfg.render.night_dim != cfg.render.night_dim
+            or new_cfg.render.seed != cfg.render.seed
+        )
+        weather_changed = (
+            new_cfg.location != cfg.location
+            or new_cfg.weather != cfg.weather
+        )
+
+        # Меняем поля существующего объекта: окна и сцены держат ссылку на него.
+        cfg.location = new_cfg.location
+        cfg.weather = new_cfg.weather
+        cfg.effects = new_cfg.effects
+        cfg.render = new_cfg.render
+
+        manager.apply_config(rebuild=effects_changed or visuals_changed)
+
+        if weather_changed:
+            new_service = make_service(cfg)
+            with weather_lock:
+                weather_state["service"] = new_service
+                weather_state["minutes"] = cfg.weather.update_minutes
+            weather_wake.set()
+
+        new_season = resolve_season(cfg, args.season)
+        if new_season != manager.season:
+            manager.set_season(new_season)
+
+        if cfg.render.fps != old_fps:
+            state["fps"] = cfg.render.fps
+            state["slow_every"] = max(1, int(round(state["fps"] / 15.0)))
+            state["last"] = time.monotonic()
+            schedule_ticks()
+
+        log.info("Конфигурация перезагружена: %s (эффект: %s)", config_path,
+                 ", ".join(EFFECT_LABELS.get(e, e) for e in manager.effects))
+        return True
+
     def quit_handler(*_args) -> None:
         stop_event.set()
+        weather_wake.set()
         GLib.idle_add(Gtk.main_quit)
 
     signal.signal(signal.SIGINT, quit_handler)
@@ -221,11 +297,13 @@ def run_overlay(cfg: Config, args) -> int:
 
     thread = threading.Thread(target=poll_weather, name="weather", daemon=True)
     thread.start()
-    GLib.timeout_add(interval_ms, tick)
+    schedule_ticks()
+    GLib.timeout_add(1000, reload_config)
     try:
         Gtk.main()
     finally:
         stop_event.set()
+        weather_wake.set()
         log.info("Остановлено")
     return 0
 
@@ -305,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:
         log.error("Анимация уже запущена (PID %s).", lock.holder())
         return 3
     try:
-        return run_overlay(cfg, args)
+        return run_overlay(cfg, args, config_path)
     except Exception:
         log.exception("Не удалось запустить анимацию")
         return 1

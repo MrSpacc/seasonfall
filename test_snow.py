@@ -9,7 +9,8 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
-from config import Config, ConfigError, EffectsConfig, default_config_path, load_config
+from config import (Config, ConfigError, ConfigWatcher, EffectsConfig,
+                    default_config_path, load_config)
 from effects import choose_effect, create_field, effect_intensity, wind_vector
 from main import InstanceLock
 from preview import make_preview
@@ -125,6 +126,16 @@ class SceneTests(unittest.TestCase):
         scene.step(1 / 30)
         self.assertTrue(scene.take_dirty() or scene.take_full_redraw())
 
+    def test_apply_config_rebuilds_field(self):
+        cfg = Config()
+        scene = Scene(640, 360, cfg, season="autumn")
+        old_field = scene.field
+        cfg.render.density = 2.0
+        scene.apply_config(rebuild=True)
+        self.assertIsNot(scene.field, old_field)
+        self.assertEqual(scene.field.density, 2.0)
+        self.assertTrue(scene.needs_full_redraw)
+
     def test_create_field_unknown(self):
         self.assertIsNone(create_field("nope", 100, 100))
 
@@ -191,6 +202,30 @@ class WeatherParsingTests(unittest.TestCase):
         self.assertIn("55.7558", url)
         self.assertIn("precipitation", url)
         self.assertIn("Europe%2FMoscow", url)
+
+
+class ConfigWatcherTests(unittest.TestCase):
+    def test_detects_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text("[render]\nfps = 20\n", encoding="utf-8")
+            watcher = ConfigWatcher(path)
+            self.assertFalse(watcher.changed())
+            stat = path.stat()
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+            self.assertTrue(watcher.changed())
+            self.assertFalse(watcher.changed())
+
+    def test_detects_creation_and_removal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            watcher = ConfigWatcher(path)
+            self.assertFalse(watcher.changed())
+            path.write_text("[render]\nfps = 20\n", encoding="utf-8")
+            self.assertTrue(watcher.changed())
+            path.unlink()
+            self.assertTrue(watcher.changed())
+            self.assertFalse(watcher.changed())
 
 
 class ConfigTests(unittest.TestCase):

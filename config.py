@@ -70,6 +70,29 @@ def default_config_path() -> Path:
     return project_root() / "config.toml"
 
 
+class ConfigWatcher:
+    """Следит за файлом конфига и сообщает, когда его стоит перечитать."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self._stamp = self._current_stamp()
+
+    def _current_stamp(self) -> tuple[int, int] | None:
+        try:
+            stat = self.path.stat()
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def changed(self) -> bool:
+        """True, если файл изменился с прошлого вызова (включая удаление)."""
+        stamp = self._current_stamp()
+        if stamp == self._stamp:
+            return False
+        self._stamp = stamp
+        return True
+
+
 def _coerce(value, default, where: str):
     if default is None:
         if value is None:

@@ -181,6 +181,13 @@ class OverlayManager:
         for window in self.windows:
             window.scene.set_season(season)
 
+    def apply_config(self, rebuild: bool = False) -> None:
+        """Раздаёт окнам обновлённый конфиг (объект меняется на месте)."""
+        for window in self.windows:
+            window.config = self.config
+            window.scene.config = self.config
+            window.scene.apply_config(rebuild=rebuild)
+
     def step(self, dt: float) -> None:
         for window in self.windows:
             window.scene.step(dt)

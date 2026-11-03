@@ -122,6 +122,12 @@ class Scene:
             self.previous = None
             self.fade = 0.0
 
+    def apply_config(self, rebuild: bool = False) -> None:
+        """Применяет новые настройки. При rebuild пересоздаёт частицы."""
+        self.needs_full_redraw = True
+        if rebuild:
+            self._rebuild(crossfade=True)
+
     # --- движение -------------------------------------------------------
     def step(self, dt: float) -> None:
         dt = max(0.0, min(0.1, dt))
