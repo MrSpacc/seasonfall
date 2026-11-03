@@ -1,0 +1,4 @@
+#!/bin/sh
+# Запуск Seasonfall. Важно: используем системный Python, а не venv из PATH.
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec /usr/bin/python3 "$DIR/main.py" "$@"

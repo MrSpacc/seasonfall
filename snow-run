@@ -1,0 +1,4 @@
+#!/bin/sh
+# Совместимость со старым именем лаунчера.
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$DIR/seasonfall-run" "$@"
